@@ -15,6 +15,12 @@ Entries live in the browser (localStorage key `beerlog.v2`), keyed by ISO date:
 - Counts move in half steps.
 - The daily average is total / days logged.
 
+## Sync
+- Optional. Settings (repo, file, token) are typed into the app and kept on the device only. Nothing identifying is in the code.
+- Every save is one commit to a separate private repo, as a single-day change on top of the latest file. Stale writes retry.
+- Offline changes queue on the device and send when the connection returns.
+- The page may only contact api.github.com (Content-Security-Policy).
+
 ## Rules
 - No personal data or tokens in this repo. Data files are git-ignored.
 - One commit per change set. No work-in-progress commits.

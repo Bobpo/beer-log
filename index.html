@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src https://api.github.com; img-src 'self' data:; base-uri 'none'; form-action 'none'">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#1f1a14">
@@ -9,10 +10,10 @@
 <style>
   :root {
     --bg:#faf7f2; --card:#ffffff; --ink:#1f1a14; --muted:#7a6f62; --line:#e6dfd3;
-    --accent:#b8741a; --accent-ink:#ffffff; --today:#1f1a14;
+    --accent:#b8741a; --accent-ink:#ffffff; --today:#1f1a14; --bad:#b3261e;
   }
   @media (prefers-color-scheme: dark) {
-    :root { --bg:#16130f; --card:#211c16; --ink:#f3ede3; --muted:#9a8f80; --line:#352d23; --accent:#e0a040; --accent-ink:#16130f; --today:#f3ede3; }
+    :root { --bg:#16130f; --card:#211c16; --ink:#f3ede3; --muted:#9a8f80; --line:#352d23; --accent:#e0a040; --accent-ink:#16130f; --today:#f3ede3; --bad:#ff8a80; }
   }
   * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
   body { margin:0; background:var(--bg); color:var(--ink); font:16px/1.4 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; padding:env(safe-area-inset-top) 16px calc(env(safe-area-inset-bottom) + 24px); max-width:520px; margin-inline:auto; }
@@ -47,6 +48,9 @@
   td.num, th.num { text-align:right; width:44px; }
   td.date { white-space:nowrap; }
   .muted { color:var(--muted); font-size:13px; }
+  .bad { color:var(--bad); }
+  .fld { display:block; margin-bottom:10px; font-size:13px; color:var(--muted); }
+  .fld input { width:100%; height:44px; margin-top:4px; border:1px solid var(--line); border-radius:10px; background:var(--bg); color:var(--ink); font:inherit; padding:0 10px; }
   .foot { display:flex; gap:10px; flex-wrap:wrap; }
 </style>
 </head>
@@ -79,6 +83,7 @@
     <button id="clear">Clear day</button>
     <span class="muted" id="status"></span>
   </div>
+  <p class="muted" id="syncLine" style="margin:8px 0 0"></p>
 </section>
 
 <section class="panel">
@@ -93,23 +98,104 @@
 <section class="foot">
   <button id="export">Export backup</button>
   <button id="import">Import backup</button>
+  <button id="syncBtn">Sync settings</button>
   <input type="file" id="file" accept="application/json" hidden>
 </section>
 
+<section class="panel" id="syncPanel" hidden style="margin-top:16px">
+  <h2>Sync with GitHub</h2>
+  <p class="muted">Entries are saved to a private repo you own. The token stays on this device.</p>
+  <label class="fld">Repo
+    <input id="repo" placeholder="owner/repo" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false">
+  </label>
+  <label class="fld">File
+    <input id="path" placeholder="data.json" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false">
+  </label>
+  <label class="fld">Token
+    <input id="token" type="password" placeholder="Paste token" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false">
+  </label>
+  <div class="row">
+    <button class="primary" id="connect">Connect</button>
+    <button id="syncNow">Sync now</button>
+    <button id="disconnect">Disconnect</button>
+  </div>
+</section>
+
 <script>
-/* ---------- Storage layer ----------
+/* ---------- Storage layer (this device) ----------
    One JSON object in localStorage, keyed by ISO date.
    { "2026-10-25": { "count": 3, "note": "IPA at the game" } }
    A date that is absent means NULL (not entered). count 0 means a logged dry day.
-   count may be null when a day has only a note.
-   Swap this layer later (file, API, cloud) without touching the rest. */
+   count may be null when a day has only a note. */
 const Store = {
   KEY: 'beerlog.v2',
-  load() {
-    try { return JSON.parse(localStorage.getItem(this.KEY)) || {}; }
-    catch { return {}; }
+  load() { try { return JSON.parse(localStorage.getItem(this.KEY)) || {}; } catch { return {}; } },
+  save(data) { try { localStorage.setItem(this.KEY, JSON.stringify(data)); } catch {} }
+};
+
+/* ---------- Sync settings and pending changes (this device only) ---------- */
+const Cfg = {
+  KEY: 'beerlog.sync',
+  load() { try { return JSON.parse(localStorage.getItem(this.KEY)) || {}; } catch { return {}; } },
+  save(c) { localStorage.setItem(this.KEY, JSON.stringify(c)); },
+  clear() { localStorage.removeItem(this.KEY); }
+};
+const Queue = {
+  KEY: 'beerlog.pending',
+  load() { try { return JSON.parse(localStorage.getItem(this.KEY)) || []; } catch { return []; } },
+  save(q) { localStorage.setItem(this.KEY, JSON.stringify(q)); }
+};
+
+/* ---------- Remote layer: one JSON file in a private GitHub repo ----------
+   Every save is a single-day change. Sync fetches the latest file, applies the
+   queued day changes on top, and writes it back with the file's sha. If the sha
+   is stale (another device wrote first) it fetches again and retries. */
+const b64enc = s => { let t = ''; new TextEncoder().encode(s).forEach(x => { t += String.fromCharCode(x); }); return btoa(t); };
+const b64dec = s => new TextDecoder().decode(Uint8Array.from(atob(s.replace(/\s/g, '')), c => c.charCodeAt(0)));
+const sortKeys = o => Object.fromEntries(Object.entries(o).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
+const clone = o => JSON.parse(JSON.stringify(o));
+
+function httpError(r) {
+  const m = {
+    401: 'Token rejected. It may be wrong or expired.',
+    403: 'Access denied or rate limited.',
+    404: 'Repo not found, or the token cannot see it.'
+  }[r.status] || `GitHub returned ${r.status}.`;
+  return new Error(m);
+}
+
+const Remote = {
+  base: 'https://api.github.com/repos/',
+  headers(c) {
+    return { 'Authorization': 'Bearer ' + c.token, 'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' };
   },
-  save(data) { localStorage.setItem(this.KEY, JSON.stringify(data)); }
+  fileUrl(c) { return this.base + c.repo + '/contents/' + c.path; },
+  async get(c) {
+    const r = await fetch(this.fileUrl(c), { headers: this.headers(c), cache: 'no-store' });
+    if (r.status === 404) {
+      // Missing file, or missing repo? Only the first case may be created later.
+      const rr = await fetch(this.base + c.repo, { headers: this.headers(c), cache: 'no-store' });
+      if (rr.ok) return { data: {}, sha: null };
+      throw httpError(rr);
+    }
+    if (!r.ok) throw httpError(r);
+    const j = await r.json();
+    if (j.encoding !== 'base64' || typeof j.content !== 'string') throw new Error('The data file is too large or unreadable.');
+    const data = JSON.parse(b64dec(j.content));
+    if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('The data file is not in the expected format.');
+    return { data, sha: j.sha };
+  },
+  async put(c, data, sha, message) {
+    const body = { message, content: b64enc(JSON.stringify(sortKeys(data), null, 1) + '\n') };
+    if (sha) body.sha = sha;
+    const r = await fetch(this.fileUrl(c), {
+      method: 'PUT',
+      headers: { ...this.headers(c), 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    if (r.status === 409 || r.status === 422) { const e = new Error('conflict'); e.conflict = true; throw e; }
+    if (!r.ok) throw httpError(r);
+  }
 };
 
 /* ---------- Domain layer (pure functions) ---------- */
@@ -129,18 +215,21 @@ function monthStats(data, y, m, today) {
   return { total, logged, elapsed, avg: logged ? total / logged : 0 };
 }
 
+const applyOp = (d, op) => { if (op.entry === null) delete d[op.date]; else d[op.date] = op.entry; };
+
 /* ---------- UI layer ---------- */
 let data = Store.load();
 const today = new Date();
 let vy = today.getFullYear(), vm = today.getMonth();
 let sel = key(today.getFullYear(), today.getMonth(), today.getDate());
 const $ = id => document.getElementById(id);
+const esc = s => s.replace(/[&<>"]/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' }[c]));
 
-function render() {
+function render(keepForm) {
   $('monthLabel').textContent = new Date(vy, vm, 1).toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
   const s = monthStats(data, vy, vm, new Date());
   $('total').textContent = s.total;
-  $('avg').textContent = s.logged ? s.avg.toFixed(2) : '\u2013';
+  $('avg').textContent = s.logged ? s.avg.toFixed(2) : '–';
   $('avgLabel').textContent = s.logged ? `Daily average (${s.logged} of ${s.elapsed} days logged)` : 'Daily average';
 
   const cal = $('cal'); cal.innerHTML = '';
@@ -159,9 +248,11 @@ function render() {
 
   const [sy, sm, sd] = sel.split('-').map(Number);
   $('dayLabel').textContent = new Date(sy, sm - 1, sd).toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
-  $('count').value = data[sel]?.count ?? '';
-  $('note').value = data[sel]?.note ?? '';
-  $('status').textContent = '';
+  if (!keepForm) {   // a background sync must not wipe what is being typed
+    $('count').value = data[sel]?.count ?? '';
+    $('note').value = data[sel]?.note ?? '';
+    $('status').textContent = '';
+  }
 
   const rows = [];
   for (let d = 1; d <= daysIn(vy, vm); d++) {
@@ -171,7 +262,6 @@ function render() {
   $('log').innerHTML = rows.join('');
   $('logEmpty').style.display = rows.length ? 'none' : 'block';
 }
-const esc = s => s.replace(/[&<>"]/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' }[c]));
 
 function shiftMonth(n) {
   vm += n;
@@ -181,6 +271,59 @@ function shiftMonth(n) {
   render();
 }
 
+/* ---------- Sync controller ---------- */
+let syncing = false, again = false;
+const nowLabel = () => new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+function setSync(msg, bad) { const e = $('syncLine'); e.textContent = msg; e.className = 'muted' + (bad ? ' bad' : ''); }
+const waiting = () => { const n = Queue.load().length; return n ? ` ${n} change${n > 1 ? 's' : ''} waiting.` : ''; };
+
+async function sync() {
+  const c = Cfg.load();
+  if (!c.token) { setSync('Not connected. Entries are saved on this device only.'); return; }
+  if (syncing) { again = true; return; }
+  syncing = true;
+  setSync('Syncing...');
+  try {
+    for (let attempt = 0; ; attempt++) {
+      const { data: remote, sha } = await Remote.get(c);
+      const q = Queue.load();
+      const merged = clone(remote);
+      q.forEach(op => applyOp(merged, op));
+      if (q.length) {
+        const dates = [...new Set(q.map(o => o.date))].slice(-3).join(', ');
+        try { await Remote.put(c, merged, sha, 'Update ' + dates); }
+        catch (e) { if (e.conflict && attempt < 3) continue; throw e; }
+      }
+      const rest = Queue.load().filter(o => !q.some(x => x.id === o.id));   // saved while we were syncing
+      Queue.save(rest);
+      data = clone(merged); rest.forEach(op => applyOp(data, op));
+      Store.save(data); render(true);
+      if (rest.length) again = true;
+      setSync(rest.length ? 'Syncing...' : 'Synced ' + nowLabel());
+      break;
+    }
+  } catch (e) {
+    const offline = navigator.onLine === false || e instanceof TypeError;
+    setSync((offline ? 'Offline.' : 'Sync problem: ' + e.message) + waiting(), true);
+  } finally {
+    syncing = false;
+    if (again) { again = false; sync(); }
+  }
+}
+
+function change(date, entry) {   // entry null = NULL (not entered)
+  if (entry === null) delete data[date]; else data[date] = entry;
+  Store.save(data);
+  if (Cfg.load().token) {
+    const q = Queue.load();
+    q.push({ id: Date.now() + '-' + Math.random().toString(36).slice(2, 8), date, entry });
+    Queue.save(q);
+    setSync('Saved on this device.' + waiting());
+    sync();
+  }
+}
+
+/* ---------- Events ---------- */
 $('prev').onclick = () => shiftMonth(-1);
 $('next').onclick = () => shiftMonth(1);
 const step = d => { $('count').value = Math.max(0, Math.round(((Number($('count').value) || 0) + d) * 2) / 2); };
@@ -192,13 +335,13 @@ $('save').onclick = () => {
   const raw = $('count').value.trim(), note = $('note').value.trim();
   const n = raw === '' ? NaN : Number(raw);
   const count = Number.isNaN(n) ? null : Math.max(0, Math.round(n * 2) / 2);
-  if (count === null && !note) delete data[sel]; else data[sel] = { count, note };
-  Store.save(data); render(); $('status').textContent = 'Saved';
+  change(sel, count === null && !note ? null : { count, note });
+  render(); $('status').textContent = 'Saved';
 };
-$('clear').onclick = () => { delete data[sel]; Store.save(data); render(); };
+$('clear').onclick = () => { change(sel, null); render(); };
 
 $('export').onclick = () => {
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const blob = new Blob([JSON.stringify(sortKeys(data), null, 2)], { type: 'application/json' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = `beer-log-${new Date().toISOString().slice(0, 10)}.json`;
@@ -209,14 +352,73 @@ $('file').onchange = async e => {
   const f = e.target.files[0]; if (!f) return;
   try {
     const incoming = JSON.parse(await f.text());
-    if (typeof incoming !== 'object' || Array.isArray(incoming)) throw 0;
+    if (typeof incoming !== 'object' || incoming === null || Array.isArray(incoming)) throw 0;
     if (!confirm('Replace current data with this backup?')) return;
-    data = incoming; Store.save(data); render();
+    const old = data;
+    data = incoming; Store.save(data);
+    if (Cfg.load().token) {   // queue the differences so they sync too
+      const q = Queue.load();
+      for (const k of new Set([...Object.keys(old), ...Object.keys(incoming)])) {
+        if (JSON.stringify(old[k] ?? null) !== JSON.stringify(incoming[k] ?? null)) {
+          q.push({ id: Date.now() + '-' + Math.random().toString(36).slice(2, 8), date: k, entry: incoming[k] ?? null });
+        }
+      }
+      Queue.save(q); sync();
+    }
+    render();
   } catch { alert('That file is not a valid backup.'); }
   e.target.value = '';
 };
 
+/* ---------- Sync settings panel ---------- */
+$('syncBtn').onclick = () => {
+  const p = $('syncPanel'); p.hidden = !p.hidden;
+  if (!p.hidden) {
+    const c = Cfg.load();
+    $('repo').value = c.repo || ''; $('path').value = c.path || '';
+    $('token').value = ''; $('token').placeholder = c.token ? 'Saved on this device' : 'Paste token';
+  }
+};
+$('connect').onclick = async () => {
+  const repo = $('repo').value.trim(), path = $('path').value.trim() || 'data.json', token = $('token').value.trim();
+  if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) { setSync('Repo must look like owner/name.', true); return; }
+  if (!token) { setSync('Paste the token first.', true); return; }
+  const c = { repo, path, token };
+  setSync('Connecting...');
+  try {
+    const { data: remote, sha } = await Remote.get(c);
+    const hasLocal = Object.keys(data).length > 0;
+    const same = JSON.stringify(sortKeys(remote)) === JSON.stringify(sortKeys(data));
+    if (sha === null && hasLocal) {
+      if (!confirm('GitHub has no data file yet. Create it from the entries on this device?')) { setSync('Not connected.'); return; }
+      await Remote.put(c, data, null, 'Create ' + path);
+    } else if (hasLocal && !same) {
+      if (!confirm('Entries on this device differ from GitHub. Replace them with the GitHub copy?')) { setSync('Not connected.'); return; }
+      data = remote;
+    } else {
+      data = remote;
+    }
+    Cfg.save(c); Queue.save([]); Store.save(data);
+    $('token').value = ''; $('syncPanel').hidden = true;
+    render(); setSync('Connected. Synced ' + nowLabel());
+  } catch (e) {
+    setSync((e instanceof TypeError ? 'Offline.' : 'Could not connect: ' + e.message), true);
+  }
+};
+$('syncNow').onclick = () => sync();
+$('disconnect').onclick = () => {
+  const n = Queue.load().length;
+  if (n && !confirm(`${n} change${n > 1 ? 's have' : ' has'} not synced and will stay only on this device. Disconnect anyway?`)) return;
+  Cfg.clear(); Queue.save([]);
+  $('syncPanel').hidden = true;
+  setSync('Disconnected. Entries are saved on this device only.');
+};
+
+window.addEventListener('online', () => sync());
+document.addEventListener('visibilitychange', () => { if (!document.hidden) sync(); });
+
 render();
+sync();
 </script>
 </body>
 </html>
