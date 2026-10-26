@@ -386,12 +386,36 @@ const stamp = () => { const n = new Date(); return key(n.getFullYear(), n.getMon
 $('exportCsv').onclick = () => deliver(`beer-log-${stamp()}.csv`, toCsv(data), 'text/csv');
 $('export').onclick = () => deliver(`beer-log-backup-${stamp()}.json`, JSON.stringify(sortKeys(data), null, 2), 'application/json');
 $('import').onclick = () => $('file').click();
+/* Returns '' when the file looks like a Backup (JSON) file, otherwise the first problem found. */
+function checkBackup(o) {
+  if (!o || typeof o !== 'object' || Array.isArray(o)) return 'It is not a backup file.';
+  const keys = Object.keys(o);
+  if (!keys.length) return 'The file has no entries.';
+  for (const k of keys) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(k);
+    const d = m && new Date(+m[1], +m[2] - 1, +m[3]);
+    if (!d || d.getFullYear() !== +m[1] || d.getMonth() !== +m[2] - 1 || d.getDate() !== +m[3]) return `"${k.slice(0, 30)}" is not a valid date.`;
+    const v = o[k];
+    if (!v || typeof v !== 'object' || Array.isArray(v)) return `The entry for ${k} is not in the expected format.`;
+    if (!(v.count === null || v.count === undefined || (typeof v.count === 'number' && Number.isFinite(v.count) && v.count >= 0 && v.count <= 100))) return `The count for ${k} is not a number of 0 or more.`;
+    if (!(v.note === undefined || v.note === null || typeof v.note === 'string')) return `The note for ${k} is not text.`;
+  }
+  return '';
+}
+
 $('file').onchange = async e => {
   const f = e.target.files[0]; if (!f) return;
   try {
-    const incoming = JSON.parse(await f.text());
-    if (typeof incoming !== 'object' || incoming === null || Array.isArray(incoming)) throw 0;
-    if (!confirm('Replace current data with this backup?')) return;
+    let parsed;
+    try { parsed = JSON.parse(await f.text()); } catch { throw new Error('It is not a JSON file. Use a file made by Backup (JSON).'); }
+    const problem = checkBackup(parsed);
+    if (problem) throw new Error(problem);
+    const incoming = Object.fromEntries(Object.keys(parsed).sort().map(k => [k, { count: parsed[k].count ?? null, note: parsed[k].note || '' }]));
+    const keys = Object.keys(incoming);
+    const msg = `This file has ${keys.length} day${keys.length === 1 ? '' : 's'} from ${keys[0]} to ${keys[keys.length - 1]}. ` +
+      `Replace the ${Object.keys(data).length} day${Object.keys(data).length === 1 ? '' : 's'} in the app?` +
+      (Cfg.load().token ? ' Sync is on, so GitHub will change too.' : '');
+    if (!confirm(msg)) return;
     const old = data;
     data = incoming; Store.save(data);
     if (Cfg.load().token) {   // queue the differences so they sync too
@@ -404,8 +428,8 @@ $('file').onchange = async e => {
       Queue.save(q); sync();
     }
     render();
-  } catch { alert('That file is not a valid backup.'); }
-  e.target.value = '';
+  } catch (err) { alert('Nothing was imported. ' + err.message); }
+  finally { e.target.value = ''; }
 };
 
 /* ---------- Sync settings panel ---------- */
