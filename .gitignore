@@ -1,3 +1,7 @@
 .DS_Store
 .write-test
 *.local
+data/
+beer-log-*.json
+beer-history*.json
+import-report*.txt
