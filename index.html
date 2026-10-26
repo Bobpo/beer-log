@@ -101,11 +101,13 @@
 </section>
 
 <section class="foot">
-  <button id="export">Export backup</button>
+  <button id="exportCsv">Export CSV</button>
+  <button id="export">Backup (JSON)</button>
   <button id="import">Import backup</button>
   <button id="syncBtn">Sync settings</button>
   <input type="file" id="file" accept="application/json" hidden>
 </section>
+<p class="muted" id="fileLine" style="margin:8px 0 0"></p>
 
 <section class="panel" id="syncPanel" hidden style="margin-top:16px">
   <h2>Sync with GitHub</h2>
@@ -345,13 +347,44 @@ $('save').onclick = () => {
 };
 $('clear').onclick = () => { change(sel, null); render(); };
 
-$('export').onclick = () => {
-  const blob = new Blob([JSON.stringify(sortKeys(data), null, 2)], { type: 'application/json' });
+/* ---------- Files out: CSV for analysis, JSON for backup ----------
+   On a phone the share sheet is used (Save to Files, AirDrop, Mail). On a computer the
+   browser downloads the file to its Downloads folder. */
+function toCsv(d) {
+  const keys = Object.keys(d).sort();
+  const head = 'date,count,note\r\n';
+  if (!keys.length) return '﻿' + head;
+  const q = v => {
+    let t = String(v ?? '');
+    if (/^[=+\-@\t\r]/.test(t)) t = "'" + t;          // stop spreadsheets reading a note as a formula
+    return /[",\r\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t;
+  };
+  const now = new Date(), todayMid = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const last = new Date(keys[keys.length - 1] + 'T00:00:00');
+  const end = last > todayMid ? last : todayMid;
+  const rows = [];
+  for (let c = new Date(keys[0] + 'T00:00:00'); c <= end; c.setDate(c.getDate() + 1)) {
+    const iso = key(c.getFullYear(), c.getMonth(), c.getDate()), e = d[iso];
+    rows.push([iso, e && e.count != null ? e.count : '', e ? e.note : ''].map(q).join(','));   // blank count = not entered
+  }
+  return '﻿' + head + rows.join('\r\n') + '\r\n';
+}
+
+async function deliver(name, text, type) {
+  const file = new File([text], name, { type });
+  const phone = window.matchMedia('(pointer: coarse)').matches;
+  if (phone && navigator.canShare && navigator.canShare({ files: [file] })) {
+    try { await navigator.share({ files: [file], title: name }); $('fileLine').textContent = 'Sent ' + name + ' to the share sheet.'; return; }
+    catch (e) { if (e && e.name === 'AbortError') { $('fileLine').textContent = 'Cancelled. Nothing was saved.'; return; } }
+  }
   const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = `beer-log-${new Date().toISOString().slice(0, 10)}.json`;
-  a.click();
-};
+  a.href = URL.createObjectURL(file); a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  $('fileLine').textContent = 'Downloaded ' + name + '. Look in your Downloads folder.';
+}
+const stamp = () => { const n = new Date(); return key(n.getFullYear(), n.getMonth(), n.getDate()); };
+$('exportCsv').onclick = () => deliver(`beer-log-${stamp()}.csv`, toCsv(data), 'text/csv');
+$('export').onclick = () => deliver(`beer-log-backup-${stamp()}.json`, JSON.stringify(sortKeys(data), null, 2), 'application/json');
 $('import').onclick = () => $('file').click();
 $('file').onchange = async e => {
   const f = e.target.files[0]; if (!f) return;

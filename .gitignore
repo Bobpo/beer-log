@@ -3,3 +3,4 @@ data/
 beer-log-*.json
 beer-history*.json
 import-report*.txt
+beer-log-*.csv

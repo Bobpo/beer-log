@@ -23,6 +23,11 @@ Entries live in the browser (localStorage key `beerlog.v2`), keyed by ISO date:
 - Offline changes queue on the device and send when the connection returns.
 - The page may only contact api.github.com (Content-Security-Policy).
 
+## Files out
+- Export CSV: one row per day from the first entry to today (`date,count,note`). A blank count means not entered, so a spreadsheet AVERAGE skips it. Opens directly in Excel.
+- Backup (JSON): the full data file, importable back into the app.
+- On a phone both go to the share sheet (Save to Files). On a computer they download.
+
 ## Rules
 - No personal data or tokens in this repo. Data files are git-ignored.
 - One commit per change set. No work-in-progress commits.
