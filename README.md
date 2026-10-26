@@ -3,7 +3,9 @@
 Personal beer tracker. Single-page app, no build step.
 
 ## Layout
-- `index.html`  the app (storage, domain, and UI layers in one file)
+- `index.html`  the app (storage, domain, sync, and UI layers in one file)
+- `manifest.webmanifest`, `icon-*.png`, `apple-touch-icon.png`  home screen install
+- `sw.js`  offline shell, network first so new releases load when online
 
 ## Data model
 Entries live in the browser (localStorage key `beerlog.v2`), keyed by ISO date:
