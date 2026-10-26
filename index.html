@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#1f1a14">
+<title>Beer Log</title>
+<style>
+  :root {
+    --bg:#faf7f2; --card:#ffffff; --ink:#1f1a14; --muted:#7a6f62; --line:#e6dfd3;
+    --accent:#b8741a; --accent-ink:#ffffff; --today:#1f1a14;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#16130f; --card:#211c16; --ink:#f3ede3; --muted:#9a8f80; --line:#352d23; --accent:#e0a040; --accent-ink:#16130f; --today:#f3ede3; }
+  }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:16px/1.4 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; padding:env(safe-area-inset-top) 16px calc(env(safe-area-inset-bottom) + 24px); max-width:520px; margin-inline:auto; }
+  h1,h2 { font-family:Georgia, "Times New Roman", serif; font-weight:700; margin:0; }
+  h1 { font-size:22px; }
+  h2 { font-size:18px; margin-bottom:8px; }
+  header { display:flex; align-items:center; justify-content:space-between; padding:16px 0 8px; }
+  button { font:inherit; color:inherit; background:var(--card); border:1px solid var(--line); border-radius:10px; padding:8px 14px; cursor:pointer; }
+  button.primary { background:var(--accent); color:var(--accent-ink); border-color:var(--accent); font-weight:600; }
+  button.nav { width:44px; height:44px; padding:0; font-size:20px; }
+  .stats { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin:8px 0 14px; }
+  .stat { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:12px; }
+  .stat .v { font-family:Georgia, serif; font-size:30px; font-weight:700; }
+  .stat .l { color:var(--muted); font-size:13px; }
+  .cal { display:grid; grid-template-columns:repeat(7,1fr); gap:4px; margin-bottom:16px; }
+  .dow { text-align:center; color:var(--muted); font-size:12px; padding:4px 0; }
+  .day { aspect-ratio:1; border:1px solid var(--line); background:var(--card); border-radius:10px; display:flex; flex-direction:column; align-items:center; justify-content:center; font-size:14px; padding:0; position:relative; }
+  .day.empty { visibility:hidden; }
+  .day .n { font-size:11px; color:var(--muted); position:absolute; top:3px; left:6px; }
+  .day .c { font-weight:700; font-size:18px; color:var(--accent); }
+  .day.sel { outline:2px solid var(--accent); }
+  .day.today .n { color:var(--today); font-weight:700; }
+  .panel { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px; margin-bottom:16px; }
+  .row { display:flex; gap:10px; align-items:center; margin-bottom:10px; }
+  .stepper button { width:48px; height:48px; font-size:22px; padding:0; }
+  input[type=number] { width:80px; height:48px; text-align:center; font-size:24px; font-weight:700; border:1px solid var(--line); border-radius:10px; background:var(--bg); color:var(--ink); }
+  textarea { width:100%; min-height:64px; border:1px solid var(--line); border-radius:10px; background:var(--bg); color:var(--ink); font:inherit; padding:10px; resize:vertical; }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  th,td { padding:6px 4px; border-bottom:1px solid var(--line); }
+  th { color:var(--muted); font-weight:600; text-align:left; }
+  td.num, th.num { text-align:right; width:44px; }
+  td.date { white-space:nowrap; }
+  .muted { color:var(--muted); font-size:13px; }
+  .foot { display:flex; gap:10px; flex-wrap:wrap; }
+</style>
+</head>
+<body>
+<header>
+  <button class="nav" id="prev" aria-label="Previous month">&lsaquo;</button>
+  <h1 id="monthLabel"></h1>
+  <button class="nav" id="next" aria-label="Next month">&rsaquo;</button>
+</header>
+
+<section class="stats">
+  <div class="stat"><div class="v" id="total">0</div><div class="l">Month total</div></div>
+  <div class="stat"><div class="v" id="avg">0.0</div><div class="l" id="avgLabel">Daily average</div></div>
+</section>
+
+<section class="cal" id="cal"></section>
+
+<section class="panel">
+  <h2 id="dayLabel"></h2>
+  <div class="row stepper">
+    <button id="minus" aria-label="One less">&minus;</button>
+    <input type="number" id="count" inputmode="numeric" min="0" step="1" value="0">
+    <button id="plus" aria-label="One more">+</button>
+  </div>
+  <textarea id="note" placeholder="Note (what, where, with who)"></textarea>
+  <div class="row" style="margin:10px 0 0">
+    <button class="primary" id="save">Save</button>
+    <button id="clear">Clear day</button>
+    <span class="muted" id="status"></span>
+  </div>
+</section>
+
+<section class="panel">
+  <h2>This month</h2>
+  <table>
+    <thead><tr><th>Date</th><th class="num">#</th><th>Note</th></tr></thead>
+    <tbody id="log"></tbody>
+  </table>
+  <p class="muted" id="logEmpty">No entries yet.</p>
+</section>
+
+<section class="foot">
+  <button id="export">Export backup</button>
+  <button id="import">Import backup</button>
+  <input type="file" id="file" accept="application/json" hidden>
+</section>
+
+<script>
+/* ---------- Storage layer ----------
+   One JSON object in localStorage, keyed by ISO date.
+   { "2026-10-25": { "count": 3, "note": "IPA at the game" } }
+   Swap this layer later (file, API, cloud) without touching the rest. */
+const Store = {
+  KEY: 'beerlog.v1',
+  load() {
+    try { return JSON.parse(localStorage.getItem(this.KEY)) || {}; }
+    catch { return {}; }
+  },
+  save(data) { localStorage.setItem(this.KEY, JSON.stringify(data)); }
+};
+
+/* ---------- Domain layer (pure functions) ---------- */
+const pad = n => String(n).padStart(2, '0');
+const key = (y, m, d) => `${y}-${pad(m + 1)}-${pad(d)}`;
+const daysIn = (y, m) => new Date(y, m + 1, 0).getDate();
+
+function monthStats(data, y, m, today) {
+  let total = 0;
+  for (let d = 1; d <= daysIn(y, m); d++) total += (data[key(y, m, d)]?.count || 0);
+  const cur = today.getFullYear() === y && today.getMonth() === m;
+  const past = new Date(y, m, 1) < new Date(today.getFullYear(), today.getMonth(), 1);
+  const days = cur ? today.getDate() : past ? daysIn(y, m) : 0;
+  return { total, days, avg: days ? total / days : 0 };
+}
+
+/* ---------- UI layer ---------- */
+let data = Store.load();
+const today = new Date();
+let vy = today.getFullYear(), vm = today.getMonth();
+let sel = key(today.getFullYear(), today.getMonth(), today.getDate());
+const $ = id => document.getElementById(id);
+
+function render() {
+  $('monthLabel').textContent = new Date(vy, vm, 1).toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+  const s = monthStats(data, vy, vm, new Date());
+  $('total').textContent = s.total;
+  $('avg').textContent = s.avg.toFixed(1);
+  $('avgLabel').textContent = s.days ? `Daily average (${s.days} days)` : 'Daily average';
+
+  const cal = $('cal'); cal.innerHTML = '';
+  ['S','M','T','W','T','F','S'].forEach(d => { const e = document.createElement('div'); e.className = 'dow'; e.textContent = d; cal.appendChild(e); });
+  const first = new Date(vy, vm, 1).getDay();
+  for (let i = 0; i < first; i++) { const e = document.createElement('div'); e.className = 'day empty'; cal.appendChild(e); }
+  const now = new Date();
+  for (let d = 1; d <= daysIn(vy, vm); d++) {
+    const k = key(vy, vm, d), c = data[k]?.count || 0;
+    const b = document.createElement('button');
+    b.className = 'day' + (k === sel ? ' sel' : '') + (k === key(now.getFullYear(), now.getMonth(), now.getDate()) ? ' today' : '');
+    b.innerHTML = `<span class="n">${d}</span>${c ? `<span class="c">${c}</span>` : ''}`;
+    b.onclick = () => { sel = k; render(); };
+    cal.appendChild(b);
+  }
+
+  const [sy, sm, sd] = sel.split('-').map(Number);
+  $('dayLabel').textContent = new Date(sy, sm - 1, sd).toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
+  $('count').value = data[sel]?.count ?? 0;
+  $('note').value = data[sel]?.note ?? '';
+  $('status').textContent = '';
+
+  const rows = [];
+  for (let d = 1; d <= daysIn(vy, vm); d++) {
+    const k = key(vy, vm, d), e = data[k];
+    if (e && (e.count || e.note)) rows.push(`<tr><td class="date">${pad(vm + 1)}/${pad(d)}</td><td class="num">${e.count}</td><td>${esc(e.note || '')}</td></tr>`);
+  }
+  $('log').innerHTML = rows.join('');
+  $('logEmpty').style.display = rows.length ? 'none' : 'block';
+}
+const esc = s => s.replace(/[&<>"]/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' }[c]));
+
+function shiftMonth(n) {
+  vm += n;
+  if (vm < 0) { vm = 11; vy--; } else if (vm > 11) { vm = 0; vy++; }
+  const dim = daysIn(vy, vm), cur = Number(sel.slice(8));
+  sel = key(vy, vm, Math.min(cur, dim));
+  render();
+}
+
+$('prev').onclick = () => shiftMonth(-1);
+$('next').onclick = () => shiftMonth(1);
+$('minus').onclick = () => { $('count').value = Math.max(0, (+$('count').value || 0) - 1); };
+$('plus').onclick = () => { $('count').value = (+$('count').value || 0) + 1; };
+$('save').onclick = () => {
+  const count = Math.max(0, Math.floor(+$('count').value || 0)), note = $('note').value.trim();
+  if (count === 0 && !note) delete data[sel]; else data[sel] = { count, note };
+  Store.save(data); render(); $('status').textContent = 'Saved';
+};
+$('clear').onclick = () => { delete data[sel]; Store.save(data); render(); };
+
+$('export').onclick = () => {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `beer-log-${new Date().toISOString().slice(0, 10)}.json`;
+  a.click();
+};
+$('import').onclick = () => $('file').click();
+$('file').onchange = async e => {
+  const f = e.target.files[0]; if (!f) return;
+  try {
+    const incoming = JSON.parse(await f.text());
+    if (typeof incoming !== 'object' || Array.isArray(incoming)) throw 0;
+    if (!confirm('Replace current data with this backup?')) return;
+    data = incoming; Store.save(data); render();
+  } catch { alert('That file is not a valid backup.'); }
+  e.target.value = '';
+};
+
+render();
+</script>
+</body>
+</html>
