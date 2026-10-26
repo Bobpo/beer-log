@@ -3,9 +3,18 @@
 Personal beer tracker. Single-page app, no build step.
 
 ## Layout
-- `index.html`  the app (storage, domain, and UI layers in one file for now)
+- `index.html`  the app (storage, domain, and UI layers in one file)
 
-## Data
-Entries are stored in the browser (localStorage, key `beerlog.v1`), keyed by ISO date.
-Planned: sync to a separate private repo (`beer-data`) through the GitHub API.
-Never commit personal data or tokens to this repo.
+## Data model
+Entries live in the browser (localStorage key `beerlog.v2`), keyed by ISO date:
+
+    { "2026-10-25": { "count": 2.5, "note": "..." } }
+
+- A missing date is NULL (not entered).
+- `count: 0` is a logged dry day.
+- Counts move in half steps.
+- The daily average is total / days logged.
+
+## Rules
+- No personal data or tokens in this repo. Data files are git-ignored.
+- One commit per change set. No work-in-progress commits.

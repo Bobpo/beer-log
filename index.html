@@ -38,7 +38,7 @@
   .day.today .n { color:var(--today); font-weight:700; }
   .panel { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px; margin-bottom:16px; }
   .row { display:flex; gap:10px; align-items:center; margin-bottom:10px; }
-  .stepper button { width:48px; height:48px; font-size:22px; padding:0; }
+  .stepper button { width:52px; height:48px; font-size:18px; padding:0; }
   input[type=number] { width:80px; height:48px; text-align:center; font-size:24px; font-weight:700; border:1px solid var(--line); border-radius:10px; background:var(--bg); color:var(--ink); }
   textarea { width:100%; min-height:64px; border:1px solid var(--line); border-radius:10px; background:var(--bg); color:var(--ink); font:inherit; padding:10px; resize:vertical; }
   table { width:100%; border-collapse:collapse; font-size:14px; }
@@ -67,14 +67,16 @@
 <section class="panel">
   <h2 id="dayLabel"></h2>
   <div class="row stepper">
-    <button id="minus" aria-label="One less">&minus;</button>
+    <button id="minus" aria-label="Minus one">&minus;1</button>
+    <button id="minusHalf" aria-label="Minus one half">&minus;&frac12;</button>
     <input type="number" id="count" inputmode="decimal" min="0" step="0.5" placeholder="&ndash;">
-    <button id="plus" aria-label="One more">+</button>
+    <button id="plusHalf" aria-label="Plus one half">+&frac12;</button>
+    <button id="plus" aria-label="Plus one">+1</button>
   </div>
   <textarea id="note" placeholder="Note (what, where, with who)"></textarea>
   <div class="row" style="margin:10px 0 0">
     <button class="primary" id="save">Save</button>
-    <button id="clear">Clear day (not entered)</button>
+    <button id="clear">Clear day</button>
     <span class="muted" id="status"></span>
   </div>
 </section>
@@ -181,8 +183,11 @@ function shiftMonth(n) {
 
 $('prev').onclick = () => shiftMonth(-1);
 $('next').onclick = () => shiftMonth(1);
-$('minus').onclick = () => { $('count').value = Math.max(0, (+$('count').value || 0) - 1); };
-$('plus').onclick = () => { $('count').value = (+$('count').value || 0) + 1; };
+const step = d => { $('count').value = Math.max(0, Math.round(((Number($('count').value) || 0) + d) * 2) / 2); };
+$('minus').onclick = () => step(-1);
+$('minusHalf').onclick = () => step(-0.5);
+$('plusHalf').onclick = () => step(0.5);
+$('plus').onclick = () => step(1);
 $('save').onclick = () => {
   const raw = $('count').value.trim(), note = $('note').value.trim();
   const n = raw === '' ? NaN : Number(raw);
